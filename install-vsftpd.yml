@@ -55,6 +55,7 @@
         shell: "{{ item.shell }}"
         password: "{{ item.password }}"
       loop: "{{ users }}"
+      no_log: true
 
     - name: Ensure server cert is deployed
       copy:
@@ -81,6 +82,7 @@
         group: nogroup
         mode: 0555
       loop: "{{ users }}"
+      no_log: true
 
     - name: create the ftp/files directory inside the users home directory
       file:
@@ -90,6 +92,7 @@
         group: "{{ item.name }}"
         mode: 0755
       loop: "{{ users }}"
+      no_log: true
 
     - name: Ensure vsftpd is started and enabled
       service:
