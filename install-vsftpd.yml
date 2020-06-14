@@ -1,0 +1,135 @@
+---
+- name: Install vsftpd in a secure manner with jailed dirs for local users and tls enabled
+  hosts: myhost
+
+  # Local users will not be able to login using SSH
+  # requires an x509 cert with an embedded private key for ftp with tls use following command:
+  # openssl req -x509 -nodes -keyout vsftpd.pem -out vsftpd.pem -days 3650 -newkey rsa:2048
+  #
+  # This works on Ubuntu 16.04
+  # This requires following firewall ports to be open:
+  # ufw allow 20/tcp
+  # ufw allow 21/tcp
+  # ufw allow 990/tcp
+  # ufw allow 40000:50000/tcp
+  # NOTE: Azure Ubuntu VMs seem to not have a local firewall enabled?
+
+  vars:
+    server_cert_local: '~/.servercerts/vsftpd.pem'
+    server_cert_remote: '/etc/ssl/private/vsftpd.pem'
+    vsftpd_config: j2/vsftpd-conf.j2
+    vsftpd_users_template: j2/vsftpd-users.j2
+    vsftpd_users_remote: '/etc/vsftpd.users'
+    pasv_min_port: 40000
+    pasv_max_port: 50000
+
+  vars_files: vars/users.yml
+
+  tasks:
+    - name: Ensure VSFTPD and UFW are installed
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: true
+      loop:
+        - vsftpd
+        - ufw
+
+    - name: Create a fake ftponly shell
+      copy:
+        content: |
+          #!/bin/sh
+          echo "This account is limited to FTP access only."
+        dest: '/bin/ftponly'
+        mode: 0755
+
+    - name: Ensure {{ fake_shell }} line is in /etc/shells
+      lineinfile:
+        regexp: '^{{ fake_shell }}'
+        line: '{{ fake_shell }}'
+        path: '/etc/shells'
+
+    - name: Ensure user(s) exists
+      user:
+        name: "{{ item.name }}"
+        shell: "{{ item.shell }}"
+        password: "{{ item.password }}"
+      loop: "{{ users }}"
+
+    - name: Ensure server cert is deployed
+      copy:
+        src: "{{ server_cert_local }}"
+        dest: "{{ server_cert_remote }}"
+
+    - name: Ensure vsftpd configuration file is in place
+      template:
+        src: "{{ vsftpd_config }}"
+        dest: '/etc/vsftpd.conf'
+      notify: Restart vsftpd
+
+    - name: Ensure vsftpd users file is in place
+      template:
+        src: "{{ vsftpd_users_template }}"
+        dest: "{{ vsftpd_users_remote }}"
+      notify: Restart vsftpd
+
+    - name: create the ftp directory inside the users home directory
+      file:
+        path: "/home/{{ item.name }}/ftp"
+        state: directory
+        owner: nobody
+        group: nogroup
+        mode: 0555
+      loop: "{{ users }}"
+
+    - name: create the ftp/files directory inside the users home directory
+      file:
+        path: "/home/{{ item.name }}/ftp/files"
+        state: directory
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: 0755
+      loop: "{{ users }}"
+
+    - name: Ensure vsftpd is started and enabled
+      service:
+        name: vsftpd
+        state: started
+        enabled: true
+
+    # Uncomment the following if UFW is needed
+    # - name: Ensure UFW is enabled and started
+    #   service:
+    #     name: ufw
+    #     state: started
+    #     enabled: true
+    #
+    # - name: Configure the UFW firewall for SSH
+    #   ufw:
+    #     rule: limit
+    #     port: ssh
+    #     proto: tcp
+    #   notify: Restart UFW
+    #
+    # - name: Configure the UFW firewall for FTP
+    #   ufw:
+    #     rule: allow
+    #     port: "{{ item }}"
+    #     proto: tcp
+    #   loop:
+    #     - 20
+    #     - 21
+    #     - "{{ pasv_min_port }}:{{ pasv_max_port }}"
+    #   notify: Restart UFW
+
+
+  handlers:
+    - name: Restart vsftpd
+      service:
+        name: vsftpd
+        state: restarted
+
+    - name: Restart UFW
+      service:
+        name: ufw
+        state: restarted
